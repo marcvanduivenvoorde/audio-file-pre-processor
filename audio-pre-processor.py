@@ -24,7 +24,7 @@ CREST_BAND_MID_MAX_DB = 14.0
 _EPS = 1e-10
 
 # Crest stats: drop contiguous silence longer than this (not applied to the written waveform).
-LONG_SILENCE_SECONDS = 0.5
+LONG_SILENCE_SECONDS = 0.1
 # Frames quieter than this (peak magnitude per frame) count as silence.
 SILENCE_THRESHOLD_LINEAR = 10.0 ** (-60.0 / 20.0)
 

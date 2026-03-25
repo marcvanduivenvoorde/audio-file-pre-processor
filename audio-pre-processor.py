@@ -320,12 +320,26 @@ def _plan_for_file(
     )
 
 
-def build_plan(source_dir: Path) -> List[PlannedAction]:
+def build_plan(source_dir: Path, show_progress: bool = False) -> List[PlannedAction]:
     target = _target_dir(source_dir)
     split_dir = _split_stereo_dir(target)
     wavs = _iter_source_wavs(source_dir)
     used_names: Set[str] = set()
-    return [_plan_for_file(w, target, split_dir, used_names) for w in wavs]
+    if show_progress and wavs:
+        print(f"Analyzing {len(wavs)} file(s) for crest factor and output plan...")
+
+    plan: List[PlannedAction] = []
+    total = len(wavs)
+    for idx, wav in enumerate(wavs, start=1):
+        plan.append(_plan_for_file(wav, target, split_dir, used_names))
+        if show_progress and total > 0:
+            bar = _progress_bar(idx, total)
+            print(f"\rPlan {idx}/{total} {wav.name}  {bar}", end="", flush=True)
+
+    if show_progress and wavs:
+        print()
+
+    return plan
 
 
 def _format_table(rows: Sequence[Sequence[str]]) -> str:
@@ -432,6 +446,35 @@ def _safe_write_stereo(
     tmp.replace(out_path)
 
 
+def _progress_bar(done: int, total: int, width: int = 24) -> str:
+    if total <= 0:
+        return "[" + ("-" * width) + "] 0%"
+    ratio = min(max(done / total, 0.0), 1.0)
+    filled = int(round(width * ratio))
+    bar = "#" * filled + "-" * (width - filled)
+    pct = int(round(ratio * 100))
+    return f"[{bar}] {pct:3d}%"
+
+
+def _print_progress_line(
+    file_done: int,
+    file_total: int,
+    total_done: int,
+    total_total: int,
+    file_index: int,
+    file_count: int,
+    file_name: str,
+    status: str,
+) -> None:
+    file_prog = _progress_bar(file_done, file_total)
+    total_prog = _progress_bar(total_done, total_total)
+    msg = (
+        f"\rFile {file_index}/{file_count} {file_name}  "
+        f"{file_prog} | Total {total_prog}  {status}"
+    )
+    print(msg, end="", flush=True)
+
+
 def execute_plan(
     plan: Sequence[PlannedAction],
     source_dir: Path,
@@ -440,12 +483,30 @@ def execute_plan(
     errors: List[str] = []
     target = _target_dir(source_dir)
     target.mkdir(parents=True, exist_ok=True)
-    if any(a.kind == "split" for a in plan):
+    actionable_actions = [a for a in plan if a.kind != "skip"]
+    file_count = len(actionable_actions)
+    total_outputs = sum(len(a.outputs) for a in actionable_actions)
+    total_done = 0
+
+    if any(a.kind == "split" for a in actionable_actions):
         _split_stereo_dir(target).mkdir(parents=True, exist_ok=True)
 
-    for action in plan:
-        if action.kind == "skip":
-            continue
+    if file_count:
+        print(f"Processing {file_count} file(s), {total_outputs} output(s)...")
+
+    for file_index, action in enumerate(actionable_actions, start=1):
+        file_total = len(action.outputs)
+        file_done = 0
+        _print_progress_line(
+            file_done,
+            file_total,
+            total_done,
+            total_outputs,
+            file_index,
+            file_count,
+            action.source.name,
+            "starting",
+        )
 
         try:
             data, sr = sf.read(str(action.source), always_2d=True)
@@ -453,11 +514,37 @@ def execute_plan(
             subtype = info.subtype
         except Exception as e:  # noqa: BLE001
             errors.append(f"{action.source.name}: failed to read: {e}")
+            file_done = file_total
+            total_done += file_total
+            _print_progress_line(
+                file_done,
+                file_total,
+                total_done,
+                total_outputs,
+                file_index,
+                file_count,
+                action.source.name,
+                "read failed",
+            )
+            print()
             continue
 
         channels = data.shape[1]
         if channels not in (1, 2):
             errors.append(f"{action.source.name}: unsupported channels at execution time ({channels})")
+            file_done = file_total
+            total_done += file_total
+            _print_progress_line(
+                file_done,
+                file_total,
+                total_done,
+                total_outputs,
+                file_index,
+                file_count,
+                action.source.name,
+                "unsupported channels",
+            )
+            print()
             continue
 
         left = data[:, 0]
@@ -474,6 +561,18 @@ def execute_plan(
                     _safe_write_stereo(out.path, normalized, sr, subtype, overwrite)
                 except Exception as e:  # noqa: BLE001
                     errors.append(f"{action.source.name}: write failed ({out.path.name}): {e}")
+                file_done += 1
+                total_done += 1
+                _print_progress_line(
+                    file_done,
+                    file_total,
+                    total_done,
+                    total_outputs,
+                    file_index,
+                    file_count,
+                    action.source.name,
+                    out.path.name,
+                )
                 continue
 
             if out.channel == "M":
@@ -494,6 +593,20 @@ def execute_plan(
                 _safe_write_mono(out.path, normalized, sr, subtype, overwrite)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{action.source.name}: write failed ({out.path.name}): {e}")
+            file_done += 1
+            total_done += 1
+            _print_progress_line(
+                file_done,
+                file_total,
+                total_done,
+                total_outputs,
+                file_index,
+                file_count,
+                action.source.name,
+                out.path.name,
+            )
+
+        print()
 
     return (0 if not errors else 1, errors)
 
@@ -522,7 +635,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Error: not a directory: {source_dir}", file=sys.stderr)
         return 1
 
-    plan = build_plan(source_dir)
+    plan = build_plan(source_dir, show_progress=True)
     print_plan(plan, source_dir)
 
     actionable = [a for a in plan if a.kind != "skip"]

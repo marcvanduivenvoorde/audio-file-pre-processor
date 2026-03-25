@@ -1,0 +1,15 @@
+---
+description: Python project; virtualenv lives in ./.venv
+alwaysApply: true
+---
+
+# Python + virtualenv location
+
+- This project uses **Python**.
+- The virtual environment must be created in the workspace root at `./.venv` (do not create it elsewhere).
+
+## Setup commands
+
+- Create venv: `python -m venv .venv`
+- Activate (PowerShell): `.\\.venv\\Scripts\\Activate.ps1`
+- Install deps: `python -m pip install -r requirements.txt` (from the activated venv)

@@ -1,0 +1,37 @@
+---
+description: Apply Clean Code principles across the codebase
+alwaysApply: true
+---
+
+# Clean Code rules
+
+## Core principles
+
+- Prefer **clarity over cleverness**.
+- Keep **functions small** and focused on one responsibility.
+- Choose **descriptive names** for modules, functions, variables, and tests (avoid abbreviations unless standard).
+- Reduce **coupling** and avoid unnecessary indirection.
+- Keep a **consistent style** (formatting, imports, structure) within a file and across the project.
+
+## Design + structure
+
+- Decompose by **domain concepts**; avoid “misc/utils” dumping grounds unless truly generic.
+- Minimize shared mutable state; prefer explicit inputs/outputs.
+- Make side-effects obvious (I/O, network, filesystem, time, randomness).
+
+## Error handling + logging
+
+- Fail fast with clear, actionable error messages.
+- Catch exceptions only when you can add value (context, retry, fallback); otherwise let them propagate.
+- Log at the right level; avoid noisy logs and avoid swallowing errors.
+
+## Tests
+
+- Add/maintain tests for non-trivial logic and bug fixes.
+- Tests should be readable: clear arrange/act/assert structure and descriptive test names.
+
+## Code review checklist (self-check)
+
+- Would a new teammate understand this without extra context?
+- Are names and boundaries telling the story of the code?
+- Is there duplication that should be consolidated (without over-abstracting)?

@@ -40,8 +40,8 @@ For each `*.wav` file found in the source directory:
 6. **Normalize each target file (before saving)**
    - For **each** output file (`-L`, `-R`, `-M`, `-S`), measure **crest factor** in dB as \(20 \log_{10}(\mathrm{peak}/\mathrm{RMS})\) on the samples that file will contain (mono: that channel; `-S`: full stereo interleaved samples). **Contiguous silence** (per-frame peak magnitude below about **-60 dBFS**) **longer than 0.5 second** is **omitted** from the RMS/peak used for crest and for choosing the normalize band; the **entire** waveform is still normalized and written.
    - **Crest &lt; 11 dB**: normalize to **-21 dBFS RMS** (full scale ±1.0).
-   - **11 dB ≤ crest ≤ 14 dB**: normalize to **-21 dBFS RMS**, then if peak would exceed **-6 dBFS**, reduce gain so peak is **≤ -6 dBFS**.
-   - **Crest &gt; 14 dB**: **peak** normalize so peak is **-6 dBFS**.
+   - **11 dB ≤ crest ≤ 14 dB**: normalize to **-21 dBFS RMS**, then if peak would exceed **-9 dBFS**, reduce gain so peak is **≤ -9 dBFS**.
+   - **Crest &gt; 14 dB**: **peak** normalize so peak is **-9 dBFS**.
    - Nearly silent material: leave unchanged.
 
 ## User confirmation (required UX)

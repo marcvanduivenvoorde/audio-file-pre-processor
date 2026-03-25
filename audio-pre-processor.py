@@ -17,8 +17,8 @@ SPLIT_STEREO_SUBDIR = "split-stereo"
 
 # Loudness / crest (dBFS full scale, samples in [-1, 1])
 RMS_TARGET_DBFS = -21.0
-PEAK_CAP_DBFS = -6.0
-# Crest factor dB = 20*log10(peak/RMS): <11 → RMS -21; 11–14 → RMS -21 + peak cap; >14 → peak -6
+PEAK_CAP_DBFS = -9.0
+# Crest factor dB = 20*log10(peak/RMS): <11 → RMS -21; 11–14 → RMS -21 + peak cap; >14 → peak -9
 CREST_BAND_LOW_LT_DB = 11.0
 CREST_BAND_MID_MAX_DB = 14.0
 _EPS = 1e-10

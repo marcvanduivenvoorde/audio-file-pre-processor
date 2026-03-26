@@ -28,6 +28,9 @@ LONG_SILENCE_SECONDS = 0.1
 # Frames quieter than this (peak magnitude per frame) count as silence.
 SILENCE_THRESHOLD_LINEAR = 10.0 ** (-60.0 / 20.0)
 
+# Planned-output table / execution when crest-based normalization is disabled.
+NORMALIZE_DISABLED_LABEL = "off (unchanged levels)"
+
 
 @dataclass(frozen=True)
 class PlannedOutput:
@@ -219,11 +222,18 @@ def _planned_output_path(
     return target_dir / name
 
 
+def _output_normalize_label(samples: np.ndarray, sample_rate: int, normalize: bool) -> str:
+    if not normalize:
+        return NORMALIZE_DISABLED_LABEL
+    return _normalization_strategy_label(samples, sample_rate)
+
+
 def _plan_for_file(
     source_file: Path,
     target_dir: Path,
     split_stereo_dir: Path,
     used_names: Set[str],
+    normalize: bool,
 ) -> PlannedAction:
     try:
         info = sf.info(str(source_file))
@@ -254,7 +264,7 @@ def _plan_for_file(
             source=source_file,
             kind="mono",
             outputs=(
-                PlannedOutput(out, "M", _normalization_strategy_label(mono, sr_i)),
+                PlannedOutput(out, "M", _output_normalize_label(mono, sr_i, normalize)),
             ),
             reason="Mono input -> copy/emit as -M",
         )
@@ -281,7 +291,7 @@ def _plan_for_file(
                 source=source_file,
                 kind="mono",
                 outputs=(
-                    PlannedOutput(out, "M", _normalization_strategy_label(left, sr_i)),
+                    PlannedOutput(out, "M", _output_normalize_label(left, sr_i, normalize)),
                 ),
                 reason="False stereo (L == R) -> emit left as -M",
             )
@@ -305,9 +315,9 @@ def _plan_for_file(
             source=source_file,
             kind="split",
             outputs=(
-                PlannedOutput(out_l, "L", _normalization_strategy_label(left, sr_i)),
-                PlannedOutput(out_r, "R", _normalization_strategy_label(right, sr_i)),
-                PlannedOutput(out_s, "S", _normalization_strategy_label(data, sr_i)),
+                PlannedOutput(out_l, "L", _output_normalize_label(left, sr_i, normalize)),
+                PlannedOutput(out_r, "R", _output_normalize_label(right, sr_i, normalize)),
+                PlannedOutput(out_s, "S", _output_normalize_label(data, sr_i, normalize)),
             ),
             reason="True stereo (L != R) -> -L/-R only in split-stereo/; -S in pre-processed/ root",
         )
@@ -320,18 +330,24 @@ def _plan_for_file(
     )
 
 
-def build_plan(source_dir: Path, show_progress: bool = False) -> List[PlannedAction]:
+def build_plan(
+    source_dir: Path,
+    show_progress: bool = False,
+    *,
+    normalize: bool = False,
+) -> List[PlannedAction]:
     target = _target_dir(source_dir)
     split_dir = _split_stereo_dir(target)
     wavs = _iter_source_wavs(source_dir)
     used_names: Set[str] = set()
     if show_progress and wavs:
-        print(f"Analyzing {len(wavs)} file(s) for crest factor and output plan...")
+        detail = "crest factor and output plan" if normalize else "output plan"
+        print(f"Analyzing {len(wavs)} file(s) for {detail}...")
 
     plan: List[PlannedAction] = []
     total = len(wavs)
     for idx, wav in enumerate(wavs, start=1):
-        plan.append(_plan_for_file(wav, target, split_dir, used_names))
+        plan.append(_plan_for_file(wav, target, split_dir, used_names, normalize))
         if show_progress and total > 0:
             bar = _progress_bar(idx, total)
             print(f"\rPlan {idx}/{total} {wav.name}  {bar}", end="", flush=True)
@@ -355,7 +371,12 @@ def _format_table(rows: Sequence[Sequence[str]]) -> str:
     return "\n".join(lines)
 
 
-def print_plan(plan: Sequence[PlannedAction], source_dir: Path) -> None:
+def print_plan(
+    plan: Sequence[PlannedAction],
+    source_dir: Path,
+    *,
+    normalize: bool = False,
+) -> None:
     target = _target_dir(source_dir)
     split_root = _split_stereo_dir(target)
     print(f"Source: {source_dir}")
@@ -391,14 +412,20 @@ def print_plan(plan: Sequence[PlannedAction], source_dir: Path) -> None:
             rows.append([src_col, out_rel, o.normalize_label, reason_col])
 
     print(_format_table(rows))
-    print(
-        "Normalize: crest factor (peak/RMS on audio excluding contiguous silence "
-        f"below -60 dBFS longer than {LONG_SILENCE_SECONDS:g} s): "
-        f"< {CREST_BAND_LOW_LT_DB:g} dB → RMS {RMS_TARGET_DBFS:.0f} dBFS; "
-        f"{CREST_BAND_LOW_LT_DB:g}–{CREST_BAND_MID_MAX_DB:g} dB → RMS {RMS_TARGET_DBFS:.0f} dBFS "
-        f"with peak ≤ {PEAK_CAP_DBFS:.0f} dBFS; "
-        f"> {CREST_BAND_MID_MAX_DB:g} dB → peak {PEAK_CAP_DBFS:.0f} dBFS."
-    )
+    if normalize:
+        print(
+            "Normalize: crest factor (peak/RMS on audio excluding contiguous silence "
+            f"below -60 dBFS longer than {LONG_SILENCE_SECONDS:g} s): "
+            f"< {CREST_BAND_LOW_LT_DB:g} dB → RMS {RMS_TARGET_DBFS:.0f} dBFS; "
+            f"{CREST_BAND_LOW_LT_DB:g}–{CREST_BAND_MID_MAX_DB:g} dB → RMS {RMS_TARGET_DBFS:.0f} dBFS "
+            f"with peak ≤ {PEAK_CAP_DBFS:.0f} dBFS; "
+            f"> {CREST_BAND_MID_MAX_DB:g} dB → peak {PEAK_CAP_DBFS:.0f} dBFS."
+        )
+    else:
+        print(
+            "Normalization is off (default). Outputs keep source levels; samples are written as "
+            "float32 without crest-based gain. Pass --normalize to enable it."
+        )
     print()
 
 
@@ -479,6 +506,8 @@ def execute_plan(
     plan: Sequence[PlannedAction],
     source_dir: Path,
     overwrite: bool,
+    *,
+    normalize: bool = False,
 ) -> Tuple[int, List[str]]:
     errors: List[str] = []
     target = _target_dir(source_dir)
@@ -557,8 +586,12 @@ def execute_plan(
                     errors.append(f"{action.source.name}: planned S output but input is not stereo")
                     continue
                 try:
-                    normalized = _normalize_output_audio(data, sr_i)
-                    _safe_write_stereo(out.path, normalized, sr, subtype, overwrite)
+                    out_samples = (
+                        _normalize_output_audio(data, sr_i)
+                        if normalize
+                        else np.asarray(data, dtype=np.float32)
+                    )
+                    _safe_write_stereo(out.path, out_samples, sr, subtype, overwrite)
                 except Exception as e:  # noqa: BLE001
                     errors.append(f"{action.source.name}: write failed ({out.path.name}): {e}")
                 file_done += 1
@@ -589,8 +622,12 @@ def execute_plan(
                 continue
 
             try:
-                normalized = _normalize_output_audio(mono, sr_i)
-                _safe_write_mono(out.path, normalized, sr, subtype, overwrite)
+                out_samples = (
+                    _normalize_output_audio(mono, sr_i)
+                    if normalize
+                    else np.asarray(mono, dtype=np.float32)
+                )
+                _safe_write_mono(out.path, out_samples, sr, subtype, overwrite)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{action.source.name}: write failed ({out.path.name}): {e}")
             file_done += 1
@@ -618,6 +655,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("source_dir", type=Path, help="Source directory containing .wav files")
     p.add_argument("--dry-run", action="store_true", help="Print planned actions only")
+    p.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Apply crest-based loudness normalization (otherwise outputs keep source levels)",
+    )
     p.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
     p.add_argument(
         "--overwrite",
@@ -635,8 +677,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Error: not a directory: {source_dir}", file=sys.stderr)
         return 1
 
-    plan = build_plan(source_dir, show_progress=True)
-    print_plan(plan, source_dir)
+    normalize = bool(args.normalize)
+    plan = build_plan(source_dir, show_progress=True, normalize=normalize)
+    print_plan(plan, source_dir, normalize=normalize)
 
     actionable = [a for a in plan if a.kind != "skip"]
     if not plan:
@@ -652,7 +695,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Cancelled.")
         return 2
 
-    exit_code, errors = execute_plan(plan, source_dir, overwrite=bool(args.overwrite))
+    exit_code, errors = execute_plan(
+        plan,
+        source_dir,
+        overwrite=bool(args.overwrite),
+        normalize=normalize,
+    )
     if errors:
         print()
         print("Errors:")

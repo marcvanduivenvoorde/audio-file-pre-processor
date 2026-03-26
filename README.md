@@ -4,11 +4,11 @@
 
 This project provides a small Python tool (`audio-pre-processor.py`) for preparing **WAV** files before further work (mixing, mastering, batch pipelines, etc.).
 
-Given a **source folder**, the script scans **top-level** `*.wav` files, classifies each by channel layout (mono, false stereo, true stereo), and writes normalized outputs under `**pre-processed/`** (and true-stereo left/right mono splits under `**pre-processed/split-stereo/**`). True stereo also gets a stereo copy with a `-S` suffix in `pre-processed/`. Filenames are **slugged** (lowercase, alphanumeric and dashes only).
+Given a **source folder**, the script scans **top-level** `*.wav` files, classifies each by channel layout (mono, false stereo, true stereo), and writes outputs under `**pre-processed/`** (and true-stereo left/right mono splits under `**pre-processed/split-stereo/**`). True stereo also gets a stereo copy with a `-S` suffix in `pre-processed/`. Filenames are **slugged** (lowercase, alphanumeric and dashes only). By default, **levels are unchanged** (samples written as float32). Pass **`--normalize`** to run **crest-aware loudness normalization** (see below).
 
-**Why it exists:** to automate a consistent first pass: split true stereo to dual mono where needed, collapse duplicate L/R to a single mono file, copy mono sources with a clear `-M` suffix, apply **crest-aware loudness normalization** (see below), and require an explicit **preview and confirmation** before any files are written—so you see the plan before touching disk.
+**Why it exists:** to automate a consistent first pass: split true stereo to dual mono where needed, collapse duplicate L/R to a single mono file, copy mono sources with a clear `-M` suffix, optionally apply crest-aware normalization, and require an explicit **preview and confirmation** before any files are written—so you see the plan before touching disk.
 
-### Normalization method and targets
+### Normalization method and targets (`--normalize`)
 
 Normalization uses **dBFS** relative to full scale (floating-point samples in roughly **±1.0**).
 
@@ -69,7 +69,8 @@ python .\audio-pre-processor.py "C:\path\to\your\source_folder"
 | Item                                    | Description                                                                                                                                                               |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `**source_dir**` (positional, required) | Directory whose **immediate** contents are scanned for `.wav` files. It is not recursive into subfolders.                                                                 |
-| `**--dry-run`**                         | Print the plan (inputs, output paths, normalization strategy per file) and **exit without writing** any files or creating folders. Does not show the confirmation prompt. |
+| `**--dry-run`**                         | Print the plan (inputs, output paths, per-output normalize row) and **exit without writing** any files or creating folders. Does not show the confirmation prompt.        |
+| `**--normalize`**                       | Compute crest factor per output and apply loudness normalization (see section 1). **Without** this flag, outputs keep source levels (no crest math, no gain).              |
 | `**--yes`**                             | **Skip** the interactive “Proceed with processing? (y/N)” prompt and run immediately after printing the plan.                                                             |
 | `**--overwrite`**                       | Allow **replacing** output files if they already exist. Without this flag, existing outputs cause a write error for that file.                                            |
 
@@ -86,8 +87,11 @@ python .\audio-pre-processor.py "C:\path\to\your\source_folder"
 # Preview only
 python .\audio-pre-processor.py "D:\audio\inbox" --dry-run
 
-# Run without confirmation (e.g. in automation)
+# Run without confirmation (e.g. in automation), levels unchanged
 python .\audio-pre-processor.py "D:\audio\inbox" --yes
+
+# Same, with crest-based normalization
+python .\audio-pre-processor.py "D:\audio\inbox" --yes --normalize
 
 # Overwrite previous outputs in pre-processed / split-stereo
 python .\audio-pre-processor.py "D:\audio\inbox" --yes --overwrite

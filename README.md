@@ -63,6 +63,16 @@ Run the script with Python, passing the **source directory** that contains the W
 python .\audio-pre-processor.py "C:\path\to\your\source_folder"
 ```
 
+## 4. GUI usage
+
+Run the desktop GUI (Tkinter) from the repository root:
+
+```powershell
+python .\audio-pre-processor-gui.py
+```
+
+The GUI uses the same processing engine as the CLI (`run_processor(...)` in `audio-pre-processor.py`), so behavior and options stay consistent.
+
 ### Arguments and options
 
 

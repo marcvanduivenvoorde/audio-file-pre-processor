@@ -5,7 +5,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Set, Tuple
+from typing import Callable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -37,6 +37,7 @@ class PlannedOutput:
     path: Path
     channel: str  # "L" | "R" | "M" | "S" (stereo copy)
     normalize_label: str  # human-readable; matches execution
+    normalize_strategy: Optional[str] = None  # "rms" | "rms_peak_cap" | "peak"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,15 @@ class PlannedAction:
     kind: str  # "split" | "mono" | "skip"
     outputs: Tuple[PlannedOutput, ...]
     reason: str
+
+
+@dataclass(frozen=True)
+class ProcessorOptions:
+    dry_run: bool = False
+    normalize: bool = False
+    overwrite: bool = False
+    assume_yes: bool = False
+    show_plan_progress: bool = True
 
 
 def _is_wav(path: Path) -> bool:
@@ -166,16 +176,17 @@ def _crest_factor_db(x: np.ndarray, sample_rate: int) -> float:
 
 
 def _normalization_strategy_label(x: np.ndarray, sample_rate: int) -> str:
-    crest = _crest_factor_db(x, sample_rate)
     rms, peak = _rms_peak_for_crest(x, sample_rate)
     if rms < _EPS and peak < _EPS:
         return "silent (unchanged)"
+    crest = float(20.0 * np.log10(peak / rms)) if rms >= _EPS else float("nan")
     if not np.isfinite(crest):
         return "silent (unchanged)"
     c = f"{crest:.1f} dB crest"
-    if crest < CREST_BAND_LOW_LT_DB:
+    strategy = _select_normalization_strategy_from_crest(crest)
+    if strategy == "rms":
         return f"RMS {RMS_TARGET_DBFS:.0f} dBFS ({c} < {CREST_BAND_LOW_LT_DB:g} dB)"
-    if crest <= CREST_BAND_MID_MAX_DB:
+    if strategy == "rms_peak_cap":
         return (
             f"RMS {RMS_TARGET_DBFS:.0f} dBFS, peak ≤ {PEAK_CAP_DBFS:.0f} dBFS "
             f"({CREST_BAND_LOW_LT_DB:g}–{CREST_BAND_MID_MAX_DB:g} dB, {c})"
@@ -183,28 +194,50 @@ def _normalization_strategy_label(x: np.ndarray, sample_rate: int) -> str:
     return f"Peak {PEAK_CAP_DBFS:.0f} dBFS ({c} > {CREST_BAND_MID_MAX_DB:g} dB)"
 
 
+def _select_normalization_strategy_from_crest(crest: float) -> str:
+    if not np.isfinite(crest):
+        return "rms"
+    if crest < CREST_BAND_LOW_LT_DB:
+        return "rms"
+    if crest <= CREST_BAND_MID_MAX_DB:
+        return "rms_peak_cap"
+    return "peak"
+
+
+def _select_normalization_strategy(x: np.ndarray, sample_rate: int) -> str:
+    """Return one of: rms, rms_peak_cap, peak."""
+    crest = _crest_factor_db(x, sample_rate)
+    return _select_normalization_strategy_from_crest(crest)
+
+
 def _normalize_output_audio(x: np.ndarray, sample_rate: int) -> np.ndarray:
     """Apply crest-based gain; returns float32 array same shape as input."""
+    strategy = _select_normalization_strategy(x, sample_rate)
+    return _normalize_output_audio_with_strategy(x, sample_rate, strategy)
+
+
+def _normalize_output_audio_with_strategy(
+    x: np.ndarray, sample_rate: int, strategy: str
+) -> np.ndarray:
+    """Apply a specific strategy: rms | rms_peak_cap | peak."""
     x64 = np.asarray(x, dtype=np.float64)
     rms, peak = _rms_peak_for_crest(x64, sample_rate)
     if rms < _EPS and peak < _EPS:
         return np.asarray(x, dtype=np.float32)
 
-    crest = _crest_factor_db(x64, sample_rate)
-    if not np.isfinite(crest):
-        return np.asarray(x, dtype=np.float32)
-
     rms_tgt = 10.0 ** (RMS_TARGET_DBFS / 20.0)
     peak_tgt = 10.0 ** (PEAK_CAP_DBFS / 20.0)
 
-    if crest < CREST_BAND_LOW_LT_DB:
+    if strategy == "rms":
         gain = rms_tgt / rms
-    elif crest <= CREST_BAND_MID_MAX_DB:
+    elif strategy == "rms_peak_cap":
         gain_rms = rms_tgt / rms
         peak_after = _peak_linear(x64 * gain_rms)
         gain = gain_rms * (peak_tgt / peak_after) if peak_after > peak_tgt else gain_rms
-    else:
+    elif strategy == "peak":
         gain = peak_tgt / peak if peak >= _EPS else 1.0
+    else:
+        raise ValueError(f"Unknown normalization strategy: {strategy}")
 
     y = x64 * gain
     return np.clip(y, -1.0, 1.0).astype(np.float32)
@@ -226,6 +259,40 @@ def _output_normalize_label(samples: np.ndarray, sample_rate: int, normalize: bo
     if not normalize:
         return NORMALIZE_DISABLED_LABEL
     return _normalization_strategy_label(samples, sample_rate)
+
+
+def _output_normalize_strategy(samples: np.ndarray, sample_rate: int, normalize: bool) -> Optional[str]:
+    if not normalize:
+        return None
+    return _select_normalization_strategy(samples, sample_rate)
+
+
+def _output_normalize_decision(
+    samples: np.ndarray, sample_rate: int, normalize: bool
+) -> Tuple[str, Optional[str]]:
+    if not normalize:
+        return (NORMALIZE_DISABLED_LABEL, None)
+
+    rms, peak = _rms_peak_for_crest(samples, sample_rate)
+    if rms < _EPS and peak < _EPS:
+        return ("silent (unchanged)", "rms")
+
+    crest = float(20.0 * np.log10(peak / rms)) if rms >= _EPS else float("nan")
+    if not np.isfinite(crest):
+        return ("silent (unchanged)", "rms")
+
+    strategy = _select_normalization_strategy_from_crest(crest)
+    c = f"{crest:.1f} dB crest"
+    if strategy == "rms":
+        label = f"RMS {RMS_TARGET_DBFS:.0f} dBFS ({c} < {CREST_BAND_LOW_LT_DB:g} dB)"
+    elif strategy == "rms_peak_cap":
+        label = (
+            f"RMS {RMS_TARGET_DBFS:.0f} dBFS, peak ≤ {PEAK_CAP_DBFS:.0f} dBFS "
+            f"({CREST_BAND_LOW_LT_DB:g}–{CREST_BAND_MID_MAX_DB:g} dB, {c})"
+        )
+    else:
+        label = f"Peak {PEAK_CAP_DBFS:.0f} dBFS ({c} > {CREST_BAND_MID_MAX_DB:g} dB)"
+    return (label, strategy)
 
 
 def _plan_for_file(
@@ -257,6 +324,7 @@ def _plan_for_file(
             )
         sr_i = int(round(sr))
         mono = data[:, 0]
+        normalize_label, normalize_strategy = _output_normalize_decision(mono, sr_i, normalize)
         out = _planned_output_path(
             target_dir=target_dir, source_file=source_file, postfix="-M", used_names=used_names
         )
@@ -264,7 +332,12 @@ def _plan_for_file(
             source=source_file,
             kind="mono",
             outputs=(
-                PlannedOutput(out, "M", _output_normalize_label(mono, sr_i, normalize)),
+                PlannedOutput(
+                    out,
+                    "M",
+                    normalize_label,
+                    normalize_strategy,
+                ),
             ),
             reason="Mono input -> copy/emit as -M",
         )
@@ -284,6 +357,7 @@ def _plan_for_file(
         left = data[:, 0]
         right = data[:, 1]
         if np.array_equal(left, right):
+            normalize_label, normalize_strategy = _output_normalize_decision(left, sr_i, normalize)
             out = _planned_output_path(
                 target_dir=target_dir, source_file=source_file, postfix="-M", used_names=used_names
             )
@@ -291,7 +365,12 @@ def _plan_for_file(
                 source=source_file,
                 kind="mono",
                 outputs=(
-                    PlannedOutput(out, "M", _output_normalize_label(left, sr_i, normalize)),
+                    PlannedOutput(
+                        out,
+                        "M",
+                        normalize_label,
+                        normalize_strategy,
+                    ),
                 ),
                 reason="False stereo (L == R) -> emit left as -M",
             )
@@ -311,13 +390,31 @@ def _plan_for_file(
         out_s = _planned_output_path(
             target_dir=target_dir, source_file=source_file, postfix="-S", used_names=used_names
         )
+        label_l, strategy_l = _output_normalize_decision(left, sr_i, normalize)
+        label_r, strategy_r = _output_normalize_decision(right, sr_i, normalize)
+        label_s, strategy_s = _output_normalize_decision(data, sr_i, normalize)
         return PlannedAction(
             source=source_file,
             kind="split",
             outputs=(
-                PlannedOutput(out_l, "L", _output_normalize_label(left, sr_i, normalize)),
-                PlannedOutput(out_r, "R", _output_normalize_label(right, sr_i, normalize)),
-                PlannedOutput(out_s, "S", _output_normalize_label(data, sr_i, normalize)),
+                PlannedOutput(
+                    out_l,
+                    "L",
+                    label_l,
+                    strategy_l,
+                ),
+                PlannedOutput(
+                    out_r,
+                    "R",
+                    label_r,
+                    strategy_r,
+                ),
+                PlannedOutput(
+                    out_s,
+                    "S",
+                    label_s,
+                    strategy_s,
+                ),
             ),
             reason="True stereo (L != R) -> -L/-R only in split-stereo/; -S in pre-processed/ root",
         )
@@ -335,6 +432,7 @@ def build_plan(
     show_progress: bool = False,
     *,
     normalize: bool = False,
+    on_action: Optional[Callable[[PlannedAction, int, int], None]] = None,
 ) -> List[PlannedAction]:
     target = _target_dir(source_dir)
     split_dir = _split_stereo_dir(target)
@@ -347,7 +445,10 @@ def build_plan(
     plan: List[PlannedAction] = []
     total = len(wavs)
     for idx, wav in enumerate(wavs, start=1):
-        plan.append(_plan_for_file(wav, target, split_dir, used_names, normalize))
+        action = _plan_for_file(wav, target, split_dir, used_names, normalize)
+        plan.append(action)
+        if on_action is not None:
+            on_action(action, idx, total)
         if show_progress and total > 0:
             bar = _progress_bar(idx, total)
             print(f"\rPlan {idx}/{total} {wav.name}  {bar}", end="", flush=True)
@@ -508,6 +609,7 @@ def execute_plan(
     overwrite: bool,
     *,
     normalize: bool = False,
+    normalize_strategy_overrides: Optional[dict[str, str]] = None,
 ) -> Tuple[int, List[str]]:
     errors: List[str] = []
     target = _target_dir(source_dir)
@@ -586,11 +688,15 @@ def execute_plan(
                     errors.append(f"{action.source.name}: planned S output but input is not stereo")
                     continue
                 try:
-                    out_samples = (
-                        _normalize_output_audio(data, sr_i)
-                        if normalize
-                        else np.asarray(data, dtype=np.float32)
-                    )
+                    if normalize:
+                        strategy = (
+                            (normalize_strategy_overrides or {}).get(str(out.path))
+                            or out.normalize_strategy
+                            or _select_normalization_strategy(data, sr_i)
+                        )
+                        out_samples = _normalize_output_audio_with_strategy(data, sr_i, strategy)
+                    else:
+                        out_samples = np.asarray(data, dtype=np.float32)
                     _safe_write_stereo(out.path, out_samples, sr, subtype, overwrite)
                 except Exception as e:  # noqa: BLE001
                     errors.append(f"{action.source.name}: write failed ({out.path.name}): {e}")
@@ -622,11 +728,15 @@ def execute_plan(
                 continue
 
             try:
-                out_samples = (
-                    _normalize_output_audio(mono, sr_i)
-                    if normalize
-                    else np.asarray(mono, dtype=np.float32)
-                )
+                if normalize:
+                    strategy = (
+                        (normalize_strategy_overrides or {}).get(str(out.path))
+                        or out.normalize_strategy
+                        or _select_normalization_strategy(mono, sr_i)
+                    )
+                    out_samples = _normalize_output_audio_with_strategy(mono, sr_i, strategy)
+                else:
+                    out_samples = np.asarray(mono, dtype=np.float32)
                 _safe_write_mono(out.path, out_samples, sr, subtype, overwrite)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{action.source.name}: write failed ({out.path.name}): {e}")
@@ -669,16 +779,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = parse_args(argv)
-    source_dir: Path = args.source_dir
-
+def run_processor(
+    source_dir: Path,
+    options: ProcessorOptions,
+    *,
+    prompt_confirm: Callable[[], bool] = _confirm,
+) -> int:
     if not source_dir.exists() or not source_dir.is_dir():
         print(f"Error: not a directory: {source_dir}", file=sys.stderr)
         return 1
 
-    normalize = bool(args.normalize)
-    plan = build_plan(source_dir, show_progress=True, normalize=normalize)
+    normalize = bool(options.normalize)
+    plan = build_plan(
+        source_dir,
+        show_progress=bool(options.show_plan_progress),
+        normalize=normalize,
+    )
     print_plan(plan, source_dir, normalize=normalize)
 
     actionable = [a for a in plan if a.kind != "skip"]
@@ -688,17 +804,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Nothing to process (all files skipped).")
         return 0
 
-    if args.dry_run:
+    if options.dry_run:
         return 0
 
-    if not args.yes and not _confirm():
+    if not options.assume_yes and not prompt_confirm():
         print("Cancelled.")
         return 2
 
     exit_code, errors = execute_plan(
         plan,
         source_dir,
-        overwrite=bool(args.overwrite),
+        overwrite=bool(options.overwrite),
         normalize=normalize,
     )
     if errors:
@@ -709,6 +825,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         print("Done.")
     return exit_code
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    return run_processor(
+        args.source_dir,
+        ProcessorOptions(
+            dry_run=bool(args.dry_run),
+            normalize=bool(args.normalize),
+            overwrite=bool(args.overwrite),
+            assume_yes=bool(args.yes),
+            show_plan_progress=True,
+        ),
+    )
 
 
 if __name__ == "__main__":

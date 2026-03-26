@@ -57,10 +57,42 @@ You need **Python 3** with `pip`. The script depends on **NumPy** and **SoundFil
 
 ## 3. Command-line usage
 
-Run the script with Python, passing the **source directory** that contains the WAV files to process:
+Run the script with Python, passing the source directory that contains WAV files:
 
 ```powershell
 python .\audio-pre-processor.py "C:\path\to\your\source_folder"
+```
+
+### CLI options
+
+| Item                                    | Description |
+| --------------------------------------- | ----------- |
+| `source_dir` (positional, required)     | Directory whose immediate contents are scanned for `.wav` files (not recursive). |
+| `--dry-run`                             | Print the plan and exit without writing files. |
+| `--normalize`                           | Enable crest-based normalization; without this flag outputs keep source levels. |
+| `--yes`                                 | Skip the interactive confirmation prompt. |
+| `--overwrite`                           | Overwrite existing outputs; otherwise write errors are reported for existing targets. |
+
+### Exit codes
+
+- **0** — success (including dry-run, or nothing to do)
+- **1** — error (invalid path, read/write failures, etc.)
+- **2** — confirmation declined (only when prompt is shown)
+
+### CLI examples
+
+```powershell
+# Preview only
+python .\audio-pre-processor.py "D:\audio\inbox" --dry-run
+
+# Run immediately (no confirmation)
+python .\audio-pre-processor.py "D:\audio\inbox" --yes
+
+# Run with crest-based normalization
+python .\audio-pre-processor.py "D:\audio\inbox" --yes --normalize
+
+# Overwrite previous outputs
+python .\audio-pre-processor.py "D:\audio\inbox" --yes --overwrite
 ```
 
 ## 4. GUI usage
@@ -71,39 +103,33 @@ Run the desktop GUI (Tkinter) from the repository root:
 python .\audio-pre-processor-gui.py
 ```
 
-The GUI uses the same processing engine as the CLI (`run_processor(...)` in `audio-pre-processor.py`), so behavior and options stay consistent.
+The GUI uses the same processing engine as the CLI (`audio-pre-processor.py`) so output behavior stays aligned.
 
-### Arguments and options
+### GUI workflow
 
+1. Choose a source folder.
+2. Set options:
+   - `Normalize`
+   - `Overwrite`
+   - `Dry run`
+3. If `Normalize` is enabled, set integer targets:
+   - RMS target (dBFS), default `-21`
+   - Peak cap (dBFS), default `-9`
+4. Click **Preview Overview**.
+5. Watch live analysis progress:
+   - spinner + `analysing audio`
+   - table rows appear file-by-file
+6. In the overview table, override strategy per output by clicking one of:
+   - `peak`
+   - `rms + peak`
+   - `rms`
+7. Click **Process**.
 
-| Item                                    | Description                                                                                                                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `**source_dir**` (positional, required) | Directory whose **immediate** contents are scanned for `.wav` files. It is not recursive into subfolders.                                                                 |
-| `**--dry-run`**                         | Print the plan (inputs, output paths, per-output normalize row) and **exit without writing** any files or creating folders. Does not show the confirmation prompt.        |
-| `**--normalize`**                       | Compute crest factor per output and apply loudness normalization (see section 1). **Without** this flag, outputs keep source levels (no crest math, no gain).              |
-| `**--yes`**                             | **Skip** the interactive “Proceed with processing? (y/N)” prompt and run immediately after printing the plan.                                                             |
-| `**--overwrite`**                       | Allow **replacing** output files if they already exist. Without this flag, existing outputs cause a write error for that file.                                            |
+### GUI overview columns
 
-
-### Exit codes
-
-- **0** — Finished successfully (including dry-run, or nothing to do).
-- **1** — Error (e.g. invalid path, read/write failures).
-- **2** — You declined the confirmation prompt (not used with `--yes`).
-
-### Examples
-
-```powershell
-# Preview only
-python .\audio-pre-processor.py "D:\audio\inbox" --dry-run
-
-# Run without confirmation (e.g. in automation), levels unchanged
-python .\audio-pre-processor.py "D:\audio\inbox" --yes
-
-# Same, with crest-based normalization
-python .\audio-pre-processor.py "D:\audio\inbox" --yes --normalize
-
-# Overwrite previous outputs in pre-processed / split-stereo
-python .\audio-pre-processor.py "D:\audio\inbox" --yes --overwrite
-```
+- `Source file`
+- `Output`
+- `Normalize plan`
+- strategy selectors: `peak`, `rms + peak`, `rms`
+- `Reason`
 

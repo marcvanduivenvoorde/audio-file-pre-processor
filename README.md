@@ -35,21 +35,39 @@ Nearly silent material (no usable stats) is left unchanged. Constants in code: `
 
 Use a virtual environment in the **project root** so dependencies stay isolated.
 
-**Create the venv** (from the repository root):
+**Create the venv** (from the repository root; same on Windows, macOS, and Linux):
 
-```powershell
-python -m venv .venv
+```bash
+python3 -m venv .venv
 ```
 
-**Activate it** (PowerShell on Windows):
+On Windows, if `python3` is not on your PATH, use `python -m venv .venv` instead.
+
+**Activate the venv**
+
+- **Windows (PowerShell):**
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-**Install dependencies:**
+- **Windows (Command Prompt):**
 
-```powershell
+```bat
+.\.venv\Scripts\activate.bat
+```
+
+- **macOS / Linux (bash, zsh, and most other shells):**
+
+```bash
+source .venv/bin/activate
+```
+
+After activation, your shell prompt usually shows `(.venv)`.
+
+**Install dependencies** (with the venv activated):
+
+```bash
 python -m pip install -r requirements.txt
 ```
 
